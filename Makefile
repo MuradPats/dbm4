@@ -1,44 +1,54 @@
-.PHONY: help up down clean pull-models reset logs
+.PHONY: warm up down logs verify-stack reset corrupt-users inject-duplicates test-fast smoke-test dashboard check \
+        hint-phase1-1 hint-phase1-2 hint-phase1-3 \
+        hint-phase2-1 hint-phase2-2 hint-phase2-3 \
+        hint-phase3-1 hint-phase3-2 hint-phase3-3
 
-COMPOSE := docker compose
-
-OLLAMA_MODEL     ?= qwen2.5:3b
-POSTGRES_USER    ?= rico
-POSTGRES_DB      ?= rico
-MINIO_ACCESS_KEY ?= minioadmin
-MINIO_SECRET_KEY ?= minioadmin
-MINIO_BUCKET     ?= rico-raw
-
-help:
-	@echo "Lab targets:"
-	@echo "  up           start Postgres+pgvector, MinIO, Ollama (waits until healthy)"
-	@echo "  pull-models  pull qwen2.5:3b into the Ollama container (run once)"
-	@echo "  down         stop services (volumes preserved)"
-	@echo "  clean        stop services and wipe volumes (full reset)"
-	@echo "  reset        truncate Postgres tables + clear MinIO bucket (lighter than clean)"
-	@echo "  logs         tail compose logs"
+warm:
+	docker compose pull --ignore-pull-failures
+	docker compose build
+	@echo "✅ Images pulled and built. Run 'make up' to start the stack."
 
 up:
-	$(COMPOSE) up -d --wait postgres minio ollama
-	$(COMPOSE) up -d minio-init ollama-init
+	docker compose up -d
 
 down:
-	$(COMPOSE) down
-
-clean:
-	$(COMPOSE) down -v
-
-pull-models:
-	$(COMPOSE) exec ollama ollama pull $(OLLAMA_MODEL)
-
-# Wipe lab data without re-pulling Ollama or rebuilding volumes.
-# Use this between notebook re-runs (after `Kernel → Restart`).
-reset:
-	$(COMPOSE) exec postgres psql -U $(POSTGRES_USER) -d $(POSTGRES_DB) -c \
-	  "TRUNCATE TABLE screens_metadata, screens_embeddings, screens_review_queue, screens_eval RESTART IDENTITY;"
-	$(COMPOSE) exec minio mc alias set local http://minio:9000 $(MINIO_ACCESS_KEY) $(MINIO_SECRET_KEY) >/dev/null
-	$(COMPOSE) exec minio mc rm --recursive --force local/$(MINIO_BUCKET)/ >/dev/null 2>&1 || true
-	@echo "lab state truncated"
+	docker compose down
 
 logs:
-	$(COMPOSE) logs -f --tail=100
+	docker compose logs --tail=200 -f
+
+verify-stack:
+	@bash scripts/verify_stack.sh
+
+# The targets below are stubs for now; they get wired up in later tasks.
+reset:
+	docker compose exec -T airflow-scheduler python /opt/chaos/reset.py
+
+corrupt-users:
+	docker compose exec -T airflow-scheduler python /opt/chaos/corrupt_users.py
+
+inject-duplicates:
+	docker compose exec -T airflow-scheduler python /opt/chaos/inject_duplicates.py
+
+test-fast:
+	docker compose exec -T airflow-scheduler bash -c 'cd /opt/airflow && pytest tests/ -q --deselect tests/test_end_to_end.py'
+
+smoke-test:
+	docker compose exec -T airflow-scheduler bash -c 'cd /opt/airflow && pytest tests/test_end_to_end.py -v -m integration'
+
+dashboard:
+	docker compose exec airflow-scheduler python /opt/airflow/dashboard/live_status.py
+
+# ─── Self-check + per-phase hints (T15) ─────────────────────────────────────
+check:
+	@./check.sh
+
+hint-phase1-1:; @cat .hints/phase1-1.md
+hint-phase1-2:; @cat .hints/phase1-2.md
+hint-phase1-3:; @cat .hints/phase1-3.md
+hint-phase2-1:; @cat .hints/phase2-1.md
+hint-phase2-2:; @cat .hints/phase2-2.md
+hint-phase2-3:; @cat .hints/phase2-3.md
+hint-phase3-1:; @cat .hints/phase3-1.md
+hint-phase3-2:; @cat .hints/phase3-2.md
+hint-phase3-3:; @cat .hints/phase3-3.md

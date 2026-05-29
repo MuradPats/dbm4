@@ -1,100 +1,94 @@
-# RICO Pipeline Lab
+# Maria's Reliability Lab
 
-A 90-minute Jupyter lab that re-derives the production RICO pipeline from primitives. You'll ingest 5 screens from HuggingFace, embed them with CLIP and SBERT, run an LLM extractor, search across the triad, and compute an honest recall@k — talking directly to a Postgres + pgvector + MinIO + Ollama stack you bring up locally with one command.
+> A 1-hour hands-on workshop on data-pipeline reliability. You'll fix
+> three real failure modes — silent corruption from a careless
+> backfill, duplicate primary keys, and missing-data on a freeze-out —
+> against an honest-to-goodness Airflow + Spark + Iceberg + Hive
+> Metastore + Trino stack.
 
-The notebook is the lecture's hands-on counterpart. It optimizes for **readability, linearity, and conceptual clarity** — not for production-credibility. No tests, no hexagonal architecture, no idempotency. One file, top to bottom, run all.
+## The night before
 
-This `lab/` folder is **self-contained** — it ships its own `docker-compose.yml`, `Makefile`, and Postgres migrations. You don't need anything outside this directory to run the lab.
+> **🌙 Run `make warm` the night before the session.** It pulls and
+> builds ~5 GB of images so the morning-of `./setup.sh` finishes in
+> under a minute.
 
-## Prerequisites
+## Prereqs
 
-You need:
+- Docker (with Compose v2). On Docker Desktop 4.30+ works well.
+- ~16 GB free disk
+- A spare 8 GB RAM you can give Docker for the duration
+- No host Python required — everything runs in containers
 
-- **Docker Desktop** (or any Docker daemon).
-- **Python 3.11** on your laptop.
-- ~3 GB free disk for model weights and the HuggingFace dataset shard.
-
-## Quickstart
-
-From inside `week07/`:
+## First-time setup
 
 ```bash
-make up           # starts Postgres+pgvector, MinIO, Ollama (waits until healthy)
-make pull-models  # pulls qwen2.5:3b into Ollama (one-time, ~1.9 GB)
-
-python3.11 -m venv .venv
-.\.venv\Scripts\activate
-pip install -r requirements.txt
-jupyter lab notebook.ipynb
+./setup.sh        # copies .env, pulls + builds images, starts stack, verifies
 ```
 
-Then `Run → Run All Cells`. The notebook walks through Sections 0–8 (Setup → Ingest → Parse → Image embeddings → Text embeddings → LLM extraction → Search → Eval → Where next).
+`./setup.sh` is idempotent: if anything is already running it just
+re-runs `make verify-stack` at the end.
 
-When you're done, `make down` (preserves data) or `make clean` (full wipe).
+You'll see green checkmarks for postgres, catalog, storage, airflow-web,
+airflow-sched, spark, and trino. That's the green light.
 
-## Connection details
+## The story
 
-The notebook hardcodes these — they match `docker-compose.yml` here in `lab/`:
+You're picking up where Maria left off. **Everything you need is in
+[`marias_notes/`](marias_notes/).** Open the files in this order:
 
-| Service  | Endpoint                  | Credentials              |
-|----------|---------------------------|--------------------------|
-| Postgres | `localhost:5432/rico`     | `rico` / `rico`          |
-| MinIO    | `http://localhost:9000`   | `minioadmin` / `minioadmin` (bucket: `rico-raw`) |
-| Ollama   | `http://localhost:11434`  | model: `qwen2.5:3b`      |
+| # | File | What it is |
+|---|---|---|
+| 1 | [`marias_notes/phase1_factory.md`](marias_notes/phase1_factory.md) | Phase 1: factory (add YAML for `prd.orders` + `prd.events`) |
+| 2 | [`marias_notes/phase2_stateful_merge.md`](marias_notes/phase2_stateful_merge.md) | Phase 2: stateful merge (rollback before backfill) |
+| 3 | [`marias_notes/phase3_circuit_breaker.md`](marias_notes/phase3_circuit_breaker.md) | Phase 3: circuit breaker + Slack (duplicates fail fast) |
+| 4 | [`marias_notes/phase_guides.md`](marias_notes/phase_guides.md) | Structured *why / where / how-to-verify* companion to the phase notes |
 
-The MinIO web console is at <http://localhost:9001> if you want to browse the bucket. If you override credentials via `.env` (see `.env.example`), edit the constants in the notebook's Section 0 imports cell to match.
+### 🎁 Bonus exercise (+2 marks)
 
-## Time budget
+[`marias_notes/take_home_trino.md`](marias_notes/take_home_trino.md) —
+wire up the Trino engine stub. Worth **2 marks** above the base
+workshop. It's the Open/Closed payoff: fill in one file, change
+nothing else, and the same DAGs run on a different compute engine.
 
-| Run            | Wall time | What dominates                              |
-|----------------|-----------|----------------------------------------------|
-| First run      | 4–8 min   | CLIP weights (~600 MB) + Ollama model warm-up + 5 sequential LLM calls |
-| Second run     | ~90 s     | 5 sequential Ollama LLM calls (~12–20 s each) |
+## Watching the work
 
-The slow cell every time is **Section 5 (LLM extraction)** — five `qwen2.5:3b` calls in series at CPU speed. Production solves this with concurrency; the notebook doesn't.
+```bash
+./check.sh                      # per-phase PASS / FAIL / NOT ATTEMPTED
+make dashboard                  # live row counts + alerts (project this!)
+docker compose logs airflow-scheduler   # if something looks off
+```
 
-## Re-running
+## Cheat codes (for the curious)
 
-The notebook is **non-idempotent on purpose**. Re-running it without restarting the kernel will hit a primary-key violation on `INSERT INTO screens_metadata` (Section 1) or `INSERT INTO screens_embeddings` (Sections 3, 4). To start fresh:
+| Command | What it does |
+|---|---|
+| `./setup.sh` | First-time bring-up (idempotent) |
+| `make warm` | Pre-pull + build images (run the night before) |
+| `make up` / `make down` | Start / stop the stack |
+| `make verify-stack` | Health-check every service |
+| `make test-fast` | Run the unit suite (<2s) |
+| `make smoke-test` | Full end-to-end DAG run (~90s) |
+| `make check` | Same as `./check.sh` |
+| `make hint-phaseN-L` | Escalating hints (`L=1,2,3`) |
+| `make reset` | Restore lab to clean baseline |
+| `make corrupt-users` | Apply the Phase 2 chaos scenario |
+| `make inject-duplicates` | Apply the Phase 3 chaos scenario |
+| `make dashboard` | Live status UI |
+| `make logs` | Tail logs for all services |
 
-1. **Restart the kernel** (`Kernel → Restart Kernel`).
-2. **Truncate state**:
-   ```bash
-   make reset    # truncates the four tables and clears the MinIO bucket
-   ```
-3. `Run All Cells` again.
+## Service endpoints
 
-If something is deeply wrong, `make clean && make up && make pull-models` resets everything, including Ollama's model cache.
+| Service | URL | Login |
+|---|---|---|
+| Airflow UI | http://localhost:8080 | `airflow` / `airflow` |
+| MinIO Console | http://localhost:9001 | `admin` / `password` |
+| Hive Metastore (thrift) | host: `catalog:9083` (internal only) | — |
+| Trino UI | http://localhost:8082 | — |
+| Spark Master UI | http://localhost:8081 | — |
 
-## Troubleshooting
+## When things break
 
-**`psycopg.OperationalError: connection refused` (Section 0).**
-Postgres container isn't running or hasn't finished starting. Run `docker compose ps` from `lab/` — wait for `(healthy)`.
+See [`SETUP.md`](SETUP.md) for troubleshooting.
 
-**`AssertionError: bucket 'rico-raw' missing` (Section 0).**
-The `minio-init` container creates the bucket on first `make up`. If `make clean` was run recently, run `make up` again to re-trigger init.
-
-**`AssertionError: model 'qwen2.5:3b' not pulled` (Section 0).**
-Run `make pull-models`.
-
-**`json.JSONDecodeError` in Section 5.**
-The LLM occasionally returns invalid JSON. That's the failure mode production code handles by routing to a review queue. The notebook just crashes — re-run the cell and the next attempt usually parses cleanly. If it fails repeatedly, restart the kernel and re-run from Section 0.
-
-**`UniqueViolation` (any INSERT cell).**
-You ran the section twice without truncating. See "Re-running" above.
-
-**CLIP first-load takes forever.**
-Open-clip downloads ~600 MB to `~/.cache/huggingface` on first use. There's no progress bar in nbconvert; check `du -sh ~/.cache/huggingface/hub` from another terminal to confirm progress.
-
-## What's in this directory
-
-| File                     | Purpose                                                  |
-|--------------------------|----------------------------------------------------------|
-| `notebook.ipynb`         | The lab itself — 43 cells, ~5 min E2E.                   |
-| `requirements.txt`       | Laptop-side pip deps (talks to docker-compose services). |
-| `chosen_screens.txt`     | The 5 screen IDs the notebook ingests (5 categories).    |
-| `docker-compose.yml`     | Lab-only stack: Postgres+pgvector, MinIO, Ollama.        |
-| `Makefile`               | `up`, `down`, `clean`, `pull-models`, `reset`.           |
-| `migrations/001_init.sql`| Postgres bootstrap — creates `pgvector` + the four tables. |
-| `.env.example`           | Optional connection overrides. Defaults are fine.        |
-| `README.md`              | This file.                                               |
+## Architecture
+![Lab 8.png](Lab%208.png)
