@@ -24,6 +24,6 @@ requests>=2.32
 datasets<3
 huggingface_hub<0.24
 fsspec<2024.4
-torch>=2.4
+torch>=2.2
 open-clip-torch>=2.30
 sentence-transformers>=3.0

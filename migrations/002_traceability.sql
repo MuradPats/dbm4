@@ -1,13 +1,11 @@
--- Migration 002: Row-level traceability, audit history, and observability metrics.
--- Runs automatically on first `make up` if the data volume is fresh.
--- For an existing volume: apply manually with:
---   docker compose exec postgres psql -U rico -d rico -f /docker-entrypoint-initdb.d/002_traceability.sql
+-- Row-level traceability, audit history, and observability metrics.
+-- Runs automatically on first `make up`
+-- To apply manually run manually: docker compose exec postgres psql -U rico -d rico -f /docker-entrypoint-initdb.d/002_traceability.sql
 
 \c rico
 
--- ────────────────────────────────────────────────────────────────────────────
 -- 1. pipeline_runs — one row per DAG run; every destination row points here.
--- ────────────────────────────────────────────────────────────────────────────
+
 CREATE TABLE IF NOT EXISTS pipeline_runs (
     run_id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     dag_run_id      TEXT NOT NULL UNIQUE,          -- Airflow's run_id string
@@ -24,60 +22,52 @@ CREATE TABLE IF NOT EXISTS pipeline_runs (
     created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
--- ────────────────────────────────────────────────────────────────────────────
 -- 2. audit_results — one row per audit check per run (queryable history).
--- ────────────────────────────────────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS audit_results (
     id          BIGSERIAL PRIMARY KEY,
     run_id      UUID NOT NULL REFERENCES pipeline_runs(run_id),
     audit_name  TEXT NOT NULL,
     passed      BOOLEAN NOT NULL,
-    details     JSONB,                             -- duplicate keys, counts, etc.
+    details     JSONB,                          
     created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
--- ────────────────────────────────────────────────────────────────────────────
 -- 3. pipeline_metrics — one row per metric per run (plottable across runs).
--- ────────────────────────────────────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS pipeline_metrics (
     id           BIGSERIAL PRIMARY KEY,
     run_id       UUID NOT NULL REFERENCES pipeline_runs(run_id),
     metric_name  TEXT NOT NULL,
-    metric_value DOUBLE PRECISION,                 -- scalar value for easy querying/plotting
-    metric_json  JSONB,                            -- richer payload when a scalar isn't enough
+    metric_value DOUBLE PRECISION,                 -- scalar for query
+    metric_json  JSONB,                            -- if scalar not good enough
     created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
 CREATE INDEX IF NOT EXISTS idx_pipeline_metrics_run_id
     ON pipeline_metrics(run_id);
 
--- ────────────────────────────────────────────────────────────────────────────
 -- 4. Extend existing tables with run_id + source_fingerprint.
 --    ADD COLUMN IF NOT EXISTS is idempotent — safe to re-run.
--- ────────────────────────────────────────────────────────────────────────────
 
 -- screens_metadata
 ALTER TABLE screens_metadata
     ADD COLUMN IF NOT EXISTS run_id             UUID REFERENCES pipeline_runs(run_id),
-    ADD COLUMN IF NOT EXISTS source_fingerprint TEXT;   -- SHA-256 of the PNG bytes
+    ADD COLUMN IF NOT EXISTS source_fingerprint TEXT;  
 
 -- screens_embeddings
 ALTER TABLE screens_embeddings
     ADD COLUMN IF NOT EXISTS run_id             UUID REFERENCES pipeline_runs(run_id),
-    ADD COLUMN IF NOT EXISTS source_fingerprint TEXT;   -- SHA-256 of the input fed to the embedder
+    ADD COLUMN IF NOT EXISTS source_fingerprint TEXT;  
 
 -- screens_review_queue
 ALTER TABLE screens_review_queue
     ADD COLUMN IF NOT EXISTS run_id             UUID REFERENCES pipeline_runs(run_id),
     ADD COLUMN IF NOT EXISTS source_fingerprint TEXT;
 
--- screens_eval (lightweight; just tag which run produced the eval row)
+-- screens_eval 
 ALTER TABLE screens_eval
     ADD COLUMN IF NOT EXISTS run_id UUID REFERENCES pipeline_runs(run_id);
 
--- ────────────────────────────────────────────────────────────────────────────
--- 5. Indexes that make the traceability queries fast.
--- ────────────────────────────────────────────────────────────────────────────
+-- 5. Indexes 
 CREATE INDEX IF NOT EXISTS idx_screens_metadata_run_id
     ON screens_metadata(run_id);
 
