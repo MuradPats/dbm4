@@ -2,7 +2,8 @@
 # Image versions are pinned for reproducibility.
 
 x-airflow-common: &airflow-common
-  image: apache/airflow:2.9.3
+  build: .          # builds Dockerfile in this directory
+  image: rico-airflow:2.9.3   # tag the built image so it's reused
   environment: &airflow-env
     AIRFLOW__CORE__EXECUTOR: LocalExecutor
     AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://${POSTGRES_USER:-rico}:${POSTGRES_PASSWORD:-rico}@postgres:5432/airflow

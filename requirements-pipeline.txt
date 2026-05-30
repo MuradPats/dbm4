@@ -1,0 +1,14 @@
+# Runtime dependencies for the Airflow pipeline workers.
+# Notebook-only packages (jupyterlab, matplotlib, etc.) are excluded.
+psycopg[binary]>=3.2
+pgvector>=0.3
+boto3>=1.35
+requests>=2.32
+numpy<2
+pillow>=10.0
+# torch and torchvision are installed in the Dockerfile as a matched pair
+open-clip-torch>=2.30
+sentence-transformers>=3.0
+datasets<3
+huggingface_hub<0.24
+fsspec<2024.4
