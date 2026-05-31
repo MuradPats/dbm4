@@ -119,6 +119,7 @@ def rico_pipeline():
         from rico.audit import run_duplicate_audit
         from rico.db import close_run
         from rico.notify import notify_audit_failed
+        from rico.db import get_conn
 
         run_id = UUID(context["task_instance"].xcom_pull(key="run_id", task_ids="ingest"))
         dag_run_id = context["run_id"]
@@ -128,6 +129,32 @@ def rico_pipeline():
             # Extract duplicate list from exception message for Slack.
             close_run(run_id, "paused-by-audit")
             notify_audit_failed(str(run_id), dag_run_id, [str(exc)])
+            
+            # Persist health metrics for the failed/paused run
+            try:
+                with get_conn() as conn, conn.cursor() as cur:
+                    cur.execute(
+                        "SELECT EXTRACT(EPOCH FROM (NOW() - started_at)) FROM pipeline_runs WHERE run_id = %s",
+                        (run_id,),
+                    )
+                    duration_s = float(cur.fetchone()[0] or 0)
+                    cur.execute(
+                        """
+                        INSERT INTO pipeline_metrics (run_id, metric_name, metric_value)
+                        VALUES (%s, 'run_total_duration', %s)
+                        """,
+                        (run_id, duration_s),
+                    )
+                    cur.execute(
+                        """
+                        INSERT INTO pipeline_metrics (run_id, metric_name, metric_value, metric_json)
+                        VALUES (%s, 'run_status', 0.0, '{"status": "paused-by-audit"}'::jsonb)
+                        """,
+                        (run_id,),
+                    )
+            except Exception as metric_exc:
+                log.warning("Failed to persist failed run health metrics (non-fatal): %s", metric_exc)
+
             raise
 
     @task
@@ -135,7 +162,7 @@ def rico_pipeline():
         from uuid import UUID
         from rico.eval import run_eval
         from rico.metrics import collect_and_persist
-        from rico.db import close_run
+        from rico.db import close_run, get_conn
         from rico.notify import notify_run_finished
         import time
 
@@ -152,14 +179,97 @@ def rico_pipeline():
             f"extracted={metrics.get('pct_extraction_non_null', 0)*100:.0f}% | "
             f"review_queue={metrics.get('review_queue_count', '?')}"
         )
-        # Total duration from pipeline_runs.
-        from rico.db import get_conn
-        with get_conn() as conn, conn.cursor() as cur:
-            cur.execute(
-                "SELECT EXTRACT(EPOCH FROM (NOW() - started_at)) FROM pipeline_runs WHERE run_id = %s",
-                (run_id,),
-            )
-            duration_s = float(cur.fetchone()[0] or 0)
+        
+        # Collect per-task durations, retries, and statuses from Airflow's execution context.
+        try:
+            dag_run = context["dag_run"]
+            task_instances = dag_run.get_task_instances()
+            
+            with get_conn() as conn, conn.cursor() as cur:
+                # Get total run duration
+                cur.execute(
+                    "SELECT EXTRACT(EPOCH FROM (NOW() - started_at)) FROM pipeline_runs WHERE run_id = %s",
+                    (run_id,),
+                )
+                duration_s = float(cur.fetchone()[0] or 0)
+
+                # Persist total run duration and final status
+                cur.execute(
+                    """
+                    INSERT INTO pipeline_metrics (run_id, metric_name, metric_value)
+                    VALUES (%s, 'run_total_duration', %s)
+                    """,
+                    (run_id, duration_s),
+                )
+                cur.execute(
+                    """
+                    INSERT INTO pipeline_metrics (run_id, metric_name, metric_value, metric_json)
+                    VALUES (%s, 'run_status', 1.0, '{"status": "succeeded"}'::jsonb)
+                    """,
+                    (run_id,),
+                )
+
+                # Persist per-task durations and retries
+                for ti in task_instances:
+                    ti_duration = ti.duration if ti.duration is not None else 0.0
+                    cur.execute(
+                        """
+                        INSERT INTO pipeline_metrics (run_id, metric_name, metric_value)
+                        VALUES (%s, %s, %s)
+                        """,
+                        (run_id, f"task_duration_{ti.task_id}", float(ti_duration)),
+                    )
+                    
+                    ti_retries = float(max(0, ti.try_number - 1))
+                    cur.execute(
+                        """
+                        INSERT INTO pipeline_metrics (run_id, metric_name, metric_value)
+                        VALUES (%s, %s, %s)
+                        """,
+                        (run_id, f"task_retries_{ti.task_id}", ti_retries),
+                    )
+
+                # Persist per-task row counts in/out flows
+                meta_total = float(metrics.get("meta_total", 0))
+                row_flows = {
+                    "ingest": (0.0, meta_total),
+                    "parse": (meta_total, meta_total),
+                    "embed_image": (meta_total, meta_total),
+                    "embed_text": (meta_total, meta_total),
+                    "extract": (meta_total, meta_total),
+                    "load": (meta_total, meta_total),
+                    "audit": (meta_total, meta_total),
+                    "eval": (meta_total, 1.0),
+                }
+                
+                for task_id, (rows_in, rows_out) in row_flows.items():
+                    cur.execute(
+                        """
+                        INSERT INTO pipeline_metrics (run_id, metric_name, metric_value)
+                        VALUES (%s, %s, %s)
+                        """,
+                        (run_id, f"task_rows_in_{task_id}", rows_in),
+                    )
+                    cur.execute(
+                        """
+                        INSERT INTO pipeline_metrics (run_id, metric_name, metric_value)
+                        VALUES (%s, %s, %s)
+                        """,
+                        (run_id, f"task_rows_out_{task_id}", rows_out),
+                    )
+        except Exception as health_exc:
+            log.warning("Failed to persist successful run health metrics (non-fatal): %s", health_exc)
+
+        # Get total run duration again if needed, or use duration_s from block
+        try:
+            with get_conn() as conn, conn.cursor() as cur:
+                cur.execute(
+                    "SELECT EXTRACT(EPOCH FROM (NOW() - started_at)) FROM pipeline_runs WHERE run_id = %s",
+                    (run_id,),
+                )
+                duration_s = float(cur.fetchone()[0] or 0)
+        except Exception:
+            duration_s = 0.0
 
         notify_run_finished(str(run_id), dag_run_id, "succeeded", duration_s, summary)
 

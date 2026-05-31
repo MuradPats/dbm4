@@ -55,7 +55,9 @@ def embed_images(run_id: UUID, screen_ids: list[int]) -> None:
                     (screen_id, model_name, model_version, embedding_kind, vector,
                      run_id, source_fingerprint)
                 VALUES (%s, %s, %s, 'image', %s, %s, %s)
-                ON CONFLICT (screen_id, model_name, model_version, embedding_kind) DO NOTHING
+                ON CONFLICT (screen_id, model_name, model_version, embedding_kind) DO UPDATE SET
+                    run_id             = EXCLUDED.run_id,
+                    source_fingerprint = EXCLUDED.source_fingerprint
                 """,
                 (sid, MODEL_NAME, MODEL_VERSION, vec_np.tolist(), run_id, fingerprint),
             )

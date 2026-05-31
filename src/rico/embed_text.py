@@ -40,7 +40,9 @@ def embed_texts(run_id: UUID, text_reps: dict[int, str]) -> None:
                     (screen_id, model_name, model_version, embedding_kind, vector,
                      run_id, source_fingerprint)
                 VALUES (%s, %s, %s, 'text', %s, %s, %s)
-                ON CONFLICT (screen_id, model_name, model_version, embedding_kind) DO NOTHING
+                ON CONFLICT (screen_id, model_name, model_version, embedding_kind) DO UPDATE SET
+                    run_id             = EXCLUDED.run_id,
+                    source_fingerprint = EXCLUDED.source_fingerprint
                 """,
                 (sid, MODEL_NAME, MODEL_VERSION, vec.tolist(), run_id, fingerprint),
             )
