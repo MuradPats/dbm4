@@ -18,6 +18,7 @@ psycopg[binary]>=3.2
 pgvector>=0.3
 boto3>=1.35
 requests>=2.32
+slack-bolt>=1.18.0
 
 # ML stack — same versions as production
 # datasets pinned to <3 so script-based HF datasets (e.g. rootsautomation/RICO-Screen2Words) still load.

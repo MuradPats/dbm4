@@ -204,6 +204,39 @@ Three messages are posted per run: run started, audit failed (only if audit fail
 
 ---
 
+## Slack "Backfill" Agent (Bonus ChatOps Task)
+
+The backfill agent runs as a standalone service `agent.py` that listens for channel mentions in Socket Mode, parses intent/screen limits via Ollama, and triggers new DAG runs via the Airflow REST API.
+
+### 1. Slack App Setup
+1. Create a Slack App in your workspace via the [Slack API Dashboard](https://api.slack.com/apps).
+2. Go to **Socket Mode** and enable it (generates an App Token starting with `xapp-...`).
+3. In **Event Subscriptions**, enable events and subscribe to bot user events: `app_mention`.
+4. In **OAuth & Permissions**, add `app_mentions:read` and `chat:write` scopes.
+5. Install the app in your workspace to obtain your Bot User Token (starts with `xoxb-...`).
+
+### 2. Configuration & Running
+Add the credentials to your local `.env` file (which is gitignored):
+```env
+SLACK_BOT_TOKEN=xoxb-...
+SLACK_APP_TOKEN=xapp-...
+```
+
+Start the backfill agent alongside the infrastructure:
+```bash
+pip install -r requirements.txt
+python agent.py
+```
+
+### 3. Usage
+Tag your bot user in a channel where it is present:
+```
+@DataBot Hey, we need more data. Can you run a backfill for 15 screens?
+```
+The bot will parse the request, trigger Airflow, and reply in the Slack thread with confirmation and the `dag_run_id`.
+
+---
+
 ## Resetting State
 
 ```bash
@@ -219,6 +252,7 @@ make clean && make up && make airflow-up
 ## Project Layout
 
 ```
+agent.py                 # Standalone ChatOps service (Bonus)
 dags/
   rico_pipeline.py        # Thin DAG — orchestration only, no business logic
 src/rico/
