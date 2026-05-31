@@ -108,6 +108,27 @@ JOIN pipeline_runs r ON r.run_id = m.run_id
 WHERE m.screen_id = 2;
 ```
 
+### Traceability Verification Tests
+
+Run these queries to verify end-to-end traceability and vector dimensions:
+
+```sql
+-- Find everything a run produced
+SELECT screen_id, app_package, source_fingerprint
+FROM screens_metadata
+WHERE run_id = (SELECT run_id FROM pipeline_runs ORDER BY started_at DESC LIMIT 1);
+
+-- Given a screen, find its run
+SELECT r.run_id, r.started_at, r.status, r.clip_version, r.sbert_version
+FROM screens_metadata m
+JOIN pipeline_runs r ON r.run_id = m.run_id
+WHERE m.screen_id = (SELECT MIN(screen_id) FROM screens_metadata);
+
+-- Verify embedding dims (512 CLIP, 384 SBERT)
+SELECT model_version, embedding_kind, AVG(vector_dims(vector))
+FROM screens_embeddings GROUP BY model_version, embedding_kind;
+```
+
 ---
 
 ## Audit
